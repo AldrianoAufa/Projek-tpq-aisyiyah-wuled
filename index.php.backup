@@ -1,0 +1,495 @@
+<?php
+session_start();
+require_once 'db_connect.php';
+
+if (!isset($_SESSION['siswa_id'])) {
+    header("Location: login.php");
+    exit;
+}
+
+$siswa_id = $_SESSION['siswa_id'];
+$nama_siswa = $_SESSION['nama'];
+
+// Get active tab
+$tab = isset($_GET['tab']) ? $_GET['tab'] : 'dashboard';
+
+// --- FILTER LOGIC (Academic Year & Semester) ---
+$current_year = date('Y');
+$current_month = date('n');
+
+// Determine default Academic Year
+if ($current_month >= 7) {
+    $default_tahun_ajaran = $current_year . '/' . ($current_year + 1);
+    $default_semester = 'ganjil';
+} else {
+    $default_tahun_ajaran = ($current_year - 1) . '/' . $current_year;
+    $default_semester = 'genap';
+}
+
+$tahun_ajaran = isset($_GET['tahun_ajaran']) ? $_GET['tahun_ajaran'] : $default_tahun_ajaran;
+$semester = isset($_GET['semester']) ? $_GET['semester'] : $default_semester;
+
+// Parse Academic Year
+$ta_parts = explode('/', $tahun_ajaran);
+$ta_start = (int)$ta_parts[0];
+$ta_end = (int)$ta_parts[1];
+
+// Define Date Ranges & Months to Display
+$months_to_show = [];
+if ($semester === 'ganjil') {
+    // July - Dec of Start Year
+    $start_date = "$ta_start-07-01";
+    $end_date = "$ta_start-12-31";
+    for ($m = 7; $m <= 12; $m++) $months_to_show[] = ['m' => $m, 'y' => $ta_start];
+} elseif ($semester === 'genap') {
+    // Jan - Jun of End Year
+    $start_date = "$ta_end-01-01";
+    $end_date = "$ta_end-06-30";
+    for ($m = 1; $m <= 6; $m++) $months_to_show[] = ['m' => $m, 'y' => $ta_end];
+} else {
+    // Full Year (July Start - June End)
+    $start_date = "$ta_start-07-01";
+    $end_date = "$ta_end-06-30";
+    for ($m = 7; $m <= 12; $m++) $months_to_show[] = ['m' => $m, 'y' => $ta_start];
+    for ($m = 1; $m <= 6; $m++) $months_to_show[] = ['m' => $m, 'y' => $ta_end];
+}
+?>
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Siswa - TPQ Aisyiyah Wuled</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="index.css">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        h1,
+        h2,
+        h3,
+        .font-serif {
+            font-family: 'Merriweather', serif;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #d1d5db;
+            border-radius: 3px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #9ca3af;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-50 min-h-screen">
+    <!-- Navbar -->
+    <nav class="bg-teal-900 shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <i class="fas fa-graduation-cap text-teal-100 text-2xl mr-3"></i>
+                    <span class="font-bold text-xl text-white font-serif">TPQ Aisyiyah Wuled</span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span class="text-teal-100 hidden sm:block">Halo, <b class="text-white"><?php echo $nama_siswa; ?></b></span>
+                    <a href="logout.php" class="text-red-300 hover:text-red-100 font-medium text-sm transition-colors">
+                        <i class="fas fa-sign-out-alt"></i> Keluar
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Content -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+        <!-- Global Filter -->
+        <div class="mb-6 bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row items-center justify-between gap-4">
+            <h2 class="text-lg font-bold text-gray-800 font-serif">Periode Akademik</h2>
+            
+        </div>
+
+        <!-- Tabs -->
+        <div class="border-b border-gray-200 mb-6">
+            <nav class="-mb-px flex space-x-8 overflow-x-auto" aria-label="Tabs">
+                <a href="?tab=dashboard&tahun_ajaran=<?php echo urlencode($tahun_ajaran); ?>&semester=<?php echo $semester; ?>" class="<?php echo $tab == 'dashboard' ? 'border-teal-500 text-teal-700' : 'border-transparent text-gray-500 hover:text-teal-600 hover:border-teal-300'; ?> whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors">
+                    <i class="fas fa-calendar-check mr-2"></i> Status Pembayaran
+                </a>
+                <a href="?tab=history&tahun_ajaran=<?php echo urlencode($tahun_ajaran); ?>&semester=<?php echo $semester; ?>" class="<?php echo $tab == 'history' ? 'border-teal-500 text-teal-700' : 'border-transparent text-gray-500 hover:text-teal-600 hover:border-teal-300'; ?> whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors">
+                    <i class="fas fa-history mr-2"></i> Riwayat Pembayaran
+                </a>
+            </nav>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="bg-white shadow-xl rounded-2xl p-6 sm:p-8">
+            <?php
+            if ($tab == 'dashboard') {
+                // Calendar Logic for SPP Harian
+
+                // Generate list of valid months based on Academic Year & Semester
+                $valid_months = [];
+                if ($semester === 'ganjil') {
+                    for ($m = 7; $m <= 12; $m++) $valid_months[] = ['m' => $m, 'y' => $ta_start];
+                } elseif ($semester === 'genap') {
+                    for ($m = 1; $m <= 6; $m++) $valid_months[] = ['m' => $m, 'y' => $ta_end];
+                } else {
+                    for ($m = 7; $m <= 12; $m++) $valid_months[] = ['m' => $m, 'y' => $ta_start];
+                    for ($m = 1; $m <= 6; $m++) $valid_months[] = ['m' => $m, 'y' => $ta_end];
+                }
+
+                // Determine Selected Month/Year
+                if (isset($_GET['month_year'])) {
+                    $parts = explode('-', $_GET['month_year']);
+                    $selected_month = (int)$parts[0];
+                    $selected_year = (int)$parts[1];
+                } else {
+                    // Default to current month if in range, otherwise first valid month
+                    $current_m = date('n');
+                    $current_y = date('Y');
+                    $found = false;
+                    foreach ($valid_months as $vm) {
+                        if ($vm['m'] == $current_m && $vm['y'] == $current_y) {
+                            $found = true;
+                            break;
+                        }
+                    }
+
+                    if ($found) {
+                        $selected_month = $current_m;
+                        $selected_year = $current_y;
+                    } else {
+                        $selected_month = $valid_months[0]['m'];
+                        $selected_year = $valid_months[0]['y'];
+                    }
+                }
+
+                $days_in_month = cal_days_in_month(CAL_GREGORIAN, $selected_month, $selected_year);
+                $month_name = date('F', mktime(0, 0, 0, $selected_month, 10));
+
+                // Get paid dates for selected month
+                $paid_dates = [];
+                $result = $conn->query("SELECT DAY(tanggal) as day FROM pembayaran_spp_harian WHERE siswa_id = '$siswa_id' AND MONTH(tanggal) = '$selected_month' AND YEAR(tanggal) = '$selected_year'");
+                while ($row = $result->fetch_assoc()) {
+                    $paid_dates[] = $row['day'];
+                }
+
+                // Get holidays
+                $holidays = [];
+                $result = $conn->query("SELECT DAY(tanggal) as day, deskripsi FROM libur WHERE MONTH(tanggal) = '$selected_month' AND YEAR(tanggal) = '$selected_year'");
+                while ($row = $result->fetch_assoc()) {
+                    $holidays[$row['day']] = $row['deskripsi'];
+                }
+            ?>
+
+                <!-- Filter Form - Tahun Ajaran, Semester, dan Bulan -->
+                <form method="GET" class="mb-8 flex flex-col sm:flex-row gap-4 items-start sm:items-center bg-gray-50 p-4 rounded-xl border border-gray-100 flex-wrap">
+                    <input type="hidden" name="tab" value="dashboard">
+
+                    <!-- Filter Tahun Ajaran -->
+                    <div class="flex items-center gap-2">
+                        <label for="tahun_ajaran" class="text-sm font-medium text-gray-700 whitespace-nowrap">Thn Ajaran:</label>
+                        <select name="tahun_ajaran" id="tahun_ajaran" onchange="this.form.submit()" class="text-sm border border-gray-300 rounded-md px-3 py-2 focus:ring-teal-500 focus:border-teal-500 outline-none">
+                            <?php
+                            $start_year_opt = 2024; // Base year
+                            for ($i = 0; $i < 5; $i++) {
+                                $y1 = $start_year_opt + $i;
+                                $y2 = $y1 + 1;
+                                $val = "$y1/$y2";
+                                $sel = ($tahun_ajaran == $val) ? 'selected' : '';
+                                echo "<option value='$val' $sel>$val</option>";
+                            }
+                            ?>
+                        </select>
+                    </div>
+
+                    <!-- Filter Semester -->
+                    <div class="flex items-center gap-2">
+                        <label for="semester" class="text-sm font-medium text-gray-700 whitespace-nowrap">Semester:</label>
+                        <select name="semester" id="semester" onchange="this.form.submit()" class="text-sm border border-gray-300 rounded-md px-3 py-2 focus:ring-teal-500 focus:border-teal-500 outline-none">
+                            <option value="ganjil" <?php echo $semester == 'ganjil' ? 'selected' : ''; ?>>Ganjil (Jul-Des)</option>
+                            <option value="genap" <?php echo $semester == 'genap' ? 'selected' : ''; ?>>Genap (Jan-Jun)</option>
+                            <option value="semua" <?php echo $semester == 'semua' ? 'selected' : ''; ?>>Satu Tahun</option>
+                        </select>
+                    </div>
+
+                    <!-- Filter Bulan -->
+                    <div class="flex items-center gap-2">
+                        <label for="month_year" class="text-sm font-medium text-gray-700 whitespace-nowrap">Bulan:</label>
+                        <select name="month_year" id="month_year" class="text-sm border border-gray-300 rounded-md px-3 py-2 focus:ring-teal-500 focus:border-teal-500 outline-none" onchange="this.form.submit()">
+                            <?php foreach ($valid_months as $vm):
+                                $val = $vm['m'] . '-' . $vm['y'];
+                                $label = date('F', mktime(0, 0, 0, $vm['m'], 10)) . ' ' . $vm['y'];
+                                $isSelected = ($selected_month == $vm['m'] && $selected_year == $vm['y']) ? 'selected' : '';
+                            ?>
+                                <option value="<?php echo $val; ?>" <?php echo $isSelected; ?>>
+                                    <?php echo $label; ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                </form>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <!-- Calendar SPP Harian -->
+                    <div>
+                        <h3 class="text-xl font-bold mb-6 text-teal-900 border-b pb-2 font-serif">Kalender SPP Harian (<?php echo "$month_name $selected_year"; ?>)</h3>
+                        <div class="grid grid-cols-7 gap-1 md:gap-2 text-center text-xs md:text-sm">
+                            <div class="font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-2">Min</div>
+                            <div class="font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-2">Sen</div>
+                            <div class="font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-2">Sel</div>
+                            <div class="font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-2">Rab</div>
+                            <div class="font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-2">Kam</div>
+                            <div class="font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-2">Jum</div>
+                            <div class="font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-2">Sab</div>
+
+                            <?php
+                            $first_day = date('w', strtotime("$selected_year-$selected_month-01"));
+                            for ($i = 0; $i < $first_day; $i++) {
+                                echo "<div></div>";
+                            }
+
+                            for ($day = 1; $day <= $days_in_month; $day++) {
+                                $date_str = "$selected_year-$selected_month-" . str_pad($day, 2, '0', STR_PAD_LEFT);
+                                $day_of_week = date('w', strtotime($date_str));
+                                $is_friday = ($day_of_week == 5);
+                                $is_paid = in_array($day, $paid_dates);
+                                $is_holiday = isset($holidays[$day]);
+
+                                $bg_class = "bg-white border border-gray-200";
+                                $text_class = "text-gray-700";
+                                $status = "";
+
+                                if ($is_paid) {
+                                    $bg_class = "bg-teal-500 border-teal-600 shadow-sm";
+                                    $text_class = "text-white";
+                                    $status = "Lunas";
+                                } elseif ($is_holiday) {
+                                    $bg_class = "bg-red-50 border-red-200";
+                                    $text_class = "text-red-500";
+                                    $status = "Libur: " . $holidays[$day];
+                                } elseif ($is_friday) {
+                                    $bg_class = "bg-gray-100 border-transparent";
+                                    $text_class = "text-gray-400";
+                                    $status = "Jumat (Libur)";
+                                }
+
+                                echo "<div class='p-2 rounded-lg $bg_class $text_class flex flex-col items-center justify-center h-14 relative group transition-all hover:scale-105'>";
+                                echo "<span class='font-bold'>$day</span>";
+                                if ($is_paid) echo "<i class='fas fa-check-circle text-[10px] mt-1'></i>";
+                                if ($status) echo "<div class='absolute bottom-full mb-2 hidden group-hover:block bg-gray-800 text-white text-xs p-2 rounded shadow-lg z-10 whitespace-nowrap'>$status</div>";
+                                echo "</div>";
+                            }
+                            ?>
+                        </div>
+                    </div>
+
+                    <!-- Status SPP Mingguan (Academic Year View) -->
+                    <div>
+                        <h3 class="text-xl font-bold mb-6 text-teal-900 border-b pb-2 font-serif">Status SPP Mingguan (<?php echo ucfirst($semester) . " " . $tahun_ajaran; ?>)</h3>
+                        <div class="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                            <?php
+                            // Fetch all weekly payments for this Academic Year range
+                            // We need to fetch based on year AND month
+                            $weekly_payments = [];
+                            // Query for both years involved
+                            $res = $conn->query("SELECT bulan, minggu_ke, tahun FROM pembayaran_spp_mingguan WHERE siswa_id = '$siswa_id' AND tahun IN ($ta_start, $ta_end)");
+                            while ($row = $res->fetch_assoc()) {
+                                $weekly_payments[$row['tahun']][$row['bulan']][] = $row['minggu_ke'];
+                            }
+
+                            foreach ($months_to_show as $period) {
+                                $m = $period['m'];
+                                $y = $period['y'];
+                                $m_name = date('F', mktime(0, 0, 0, $m, 10));
+                                $paid_weeks = isset($weekly_payments[$y][$m]) ? $weekly_payments[$y][$m] : [];
+                            ?>
+                                <div class="bg-white border border-gray-100 rounded-xl p-4 flex items-center justify-between shadow-sm hover:shadow-md transition-shadow">
+                                    <div class="w-32 font-semibold text-gray-700">
+                                        <?php echo $m_name; ?> <span class="text-xs text-gray-400 block"><?php echo $y; ?></span>
+                                    </div>
+                                    <div class="flex gap-3">
+                                        <?php for ($w = 1; $w <= 4; $w++):
+                                            $is_paid = in_array($w, $paid_weeks);
+                                        ?>
+                                            <div class="flex flex-col items-center">
+                                                <span class="text-[10px] text-gray-400 mb-1 uppercase">M<?php echo $w; ?></span>
+                                                <div class="w-8 h-8 rounded-full flex items-center justify-center transition-all <?php echo $is_paid ? 'bg-teal-500 text-white shadow-sm scale-110' : 'bg-gray-100 text-gray-300'; ?>">
+                                                    <i class="fas <?php echo $is_paid ? 'fa-check' : 'fa-times'; ?> text-xs"></i>
+                                                </div>
+                                            </div>
+                                        <?php endfor; ?>
+                                    </div>
+                                </div>
+                            <?php
+                            }
+                            ?>
+                        </div>
+                    </div>
+                </div>
+            <?php
+
+            } else if ($tab == 'history') {
+                // Fetch ALL payments and merge
+                $history = [];
+
+                // Daily SPP - Grouped by Transaction Time (approx)
+                // Filter by DATE RANGE ($start_date to $end_date)
+                $query_harian = "
+                    SELECT 
+                        MAX(created_at) as tanggal_transaksi, 
+                        SUM(jumlah) as total_jumlah, 
+                        'SPP Harian' as tipe, 
+                        CONCAT(DATE_FORMAT(MIN(tanggal), '%d/%m/%Y'), ' - ', DATE_FORMAT(MAX(tanggal), '%d/%m/%Y'), ' (', COUNT(*), ' Hari)') as detail 
+                    FROM pembayaran_spp_harian 
+                    WHERE siswa_id = '$siswa_id' AND tanggal BETWEEN '$start_date' AND '$end_date'
+                    GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d %H:%i')
+                ";
+                $res = $conn->query($query_harian);
+                while ($row = $res->fetch_assoc()) $history[] = $row;
+
+                // Weekly SPP - Grouped by Transaction Time
+                // Filter by Infaq Condition (Month/Year)
+                // Note: $infaq_condition variable is not defined in this file yet.
+                // We need to define it or use the logic manually.
+
+                // Re-define infaq condition logic locally if not present, or use the one from dashboard logic if we copied it.
+                // Wait, I didn't copy $infaq_condition definition in the previous step. Let's define it now.
+
+                if ($semester === 'ganjil') {
+                    $infaq_cond = "(tahun = $ta_start AND bulan >= 7)";
+                } elseif ($semester === 'genap') {
+                    $infaq_cond = "(tahun = $ta_end AND bulan <= 6)";
+                } else {
+                    $infaq_cond = "((tahun = $ta_start AND bulan >= 7) OR (tahun = $ta_end AND bulan <= 6))";
+                }
+
+                $query_mingguan = "
+                    SELECT 
+                        created_at, 
+                        jumlah, 
+                        minggu_ke, 
+                        bulan, 
+                        tahun 
+                    FROM pembayaran_spp_mingguan 
+                    WHERE siswa_id = '$siswa_id' AND $infaq_cond
+                    ORDER BY created_at DESC, tahun DESC, bulan DESC, minggu_ke DESC
+                ";
+                $res = $conn->query($query_mingguan);
+                $grouped_mingguan = [];
+
+                while ($row = $res->fetch_assoc()) {
+                    // Group by minute
+                    $key = date('Y-m-d H:i', strtotime($row['created_at']));
+                    if (!isset($grouped_mingguan[$key])) {
+                        $grouped_mingguan[$key] = [
+                            'tanggal_transaksi' => $row['created_at'],
+                            'total_jumlah' => 0,
+                            'tipe' => 'SPP Mingguan',
+                            'items' => []
+                        ];
+                    }
+                    $grouped_mingguan[$key]['total_jumlah'] += $row['jumlah'];
+                    $grouped_mingguan[$key]['items'][] = $row;
+                }
+
+                foreach ($grouped_mingguan as $group) {
+                    $details = [];
+                    // Group items by Month-Year internally
+                    $by_month = [];
+                    foreach ($group['items'] as $item) {
+                        $m_y = $item['bulan'] . '-' . $item['tahun'];
+                        $by_month[$m_y][] = $item['minggu_ke'];
+                    }
+
+                    // Sort months chronologically ascending (Oldest -> Newest) for better readability
+                    uksort($by_month, function ($a, $b) {
+                        list($ma, $ya) = explode('-', $a);
+                        list($mb, $yb) = explode('-', $b);
+                        $ta = mktime(0, 0, 0, $ma, 1, $ya);
+                        $tb = mktime(0, 0, 0, $mb, 1, $yb);
+                        return $ta - $tb;
+                    });
+
+                    foreach ($by_month as $m_y => $weeks) {
+                        list($bulan, $tahun) = explode('-', $m_y);
+                        $min_w = min($weeks);
+                        $max_w = max($weeks);
+                        $month_name = date('M', mktime(0, 0, 0, $bulan, 10));
+                        $details[] = "Minggu $min_w-$max_w ($month_name $tahun)";
+                    }
+
+                    $history[] = [
+                        'tanggal_transaksi' => $group['tanggal_transaksi'],
+                        'total_jumlah' => $group['total_jumlah'],
+                        'tipe' => 'SPP Mingguan',
+                        'detail' => implode(', ', $details)
+                    ];
+                }
+
+                // Other Fees - Filter by Date
+                $query_lain = "
+                    SELECT 
+                        p.created_at as tanggal_transaksi, 
+                        p.jumlah as total_jumlah, 
+                        'Biaya Lain' as tipe, 
+                        b.nama as detail 
+                    FROM pembayaran_biaya_lain p 
+                    JOIN biaya_lain_master b ON p.biaya_lain_id = b.id 
+                    WHERE p.siswa_id = '$siswa_id' AND p.tanggal BETWEEN '$start_date' AND '$end_date'
+                ";
+                $res = $conn->query($query_lain);
+                while ($row = $res->fetch_assoc()) $history[] = $row;
+
+                // Sort by date desc
+                usort($history, function ($a, $b) {
+                    return strtotime($b['tanggal_transaksi']) - strtotime($a['tanggal_transaksi']);
+                });
+            ?>
+                <h3 class="text-xl font-bold mb-6 text-teal-900 font-serif">Riwayat Pembayaran Lengkap</h3>
+                <div class="bg-white shadow-sm overflow-hidden rounded-xl border border-gray-100">
+                    <ul class="divide-y divide-gray-100">
+                        <?php if (empty($history)): ?>
+                            <li class="px-6 py-8 text-sm text-gray-500 text-center">Belum ada riwayat pembayaran.</li>
+                        <?php else: ?>
+                            <?php foreach ($history as $h): ?>
+                                <li class="px-6 py-4 hover:bg-teal-50 transition-colors flex flex-col md:flex-row md:items-center md:justify-between text-sm gap-2 md:gap-0">
+                                    <div class="flex flex-col md:flex-row md:items-center gap-2 md:gap-4 flex-1">
+                                        <div class="flex items-center justify-between md:justify-start gap-4 w-full md:w-auto">
+                                            <span class="text-gray-500 w-auto md:w-32 flex-shrink-0 text-xs"><?php echo date('d/m/Y H:i', strtotime($h['tanggal_transaksi'])); ?></span>
+                                            <span class="px-3 py-1 rounded-full text-xs font-bold w-auto md:w-28 text-center flex-shrink-0
+                                            <?php echo $h['tipe'] == 'SPP Harian' ? 'bg-teal-100 text-teal-800' : ($h['tipe'] == 'SPP Mingguan' ? 'bg-cyan-100 text-cyan-800' : 'bg-purple-100 text-purple-800'); ?>">
+                                                <?php echo $h['tipe']; ?>
+                                            </span>
+                                        </div>
+                                        <span class="text-gray-700 w-full md:w-auto font-medium"><?php echo $h['detail']; ?></span>
+                                    </div>
+                                    <div class="font-bold text-teal-900 md:ml-4 mt-1 md:mt-0 text-right md:text-left text-base">Rp <?php echo number_format($h['total_jumlah'], 0, ',', '.'); ?></div>
+                                </li>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </ul>
+                </div>
+            <?php
+            }
+            ?>
+        </div>
+    </div>
+</body>
+
+</html>

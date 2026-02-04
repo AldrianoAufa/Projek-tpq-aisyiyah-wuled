@@ -1,0 +1,447 @@
+<?php
+// Configuration for Targets (Fetched from Settings)
+$settings = [];
+$q_set = $conn->query("SELECT * FROM settings");
+while ($row = $q_set->fetch_assoc()) {
+    $settings[$row['key']] = $row['value'];
+}
+
+$target_ikhsan = (int)($settings['target_ikhsan_tahunan'] ?? 146000);
+$target_infaq = (int)($settings['target_infaq_tahunan'] ?? 0);
+
+// Get Current User Role and ID
+$user_role = $_SESSION['role'] ?? '';
+$user_id = $_SESSION['user_id'] ?? 0;
+
+// Handle Class Filter (Admin Only)
+$kelas_filter = '';
+if ($user_role === 'admin' && isset($_GET['kelas_filter']) && !empty($_GET['kelas_filter'])) {
+    $kelas_filter = (int)$_GET['kelas_filter'];
+}
+
+// For Guru, automatically filter by their assigned class(es)
+// Note: A teacher might have multiple classes. For simplicity, we'll fetch all students from all their classes.
+$guru_kelas_ids = [];
+if ($user_role === 'guru') {
+    $q_guru_kelas = $conn->query("SELECT kelas_id FROM guru_kelas WHERE user_id = $user_id");
+    while ($row = $q_guru_kelas->fetch_assoc()) {
+        $guru_kelas_ids[] = $row['kelas_id'];
+    }
+}
+
+// Build WHERE clause for queries
+$where_clause = "";
+if ($user_role === 'admin' && $kelas_filter) {
+    $where_clause = " WHERE s.kelas_id = $kelas_filter ";
+} elseif ($user_role === 'guru') {
+    if (!empty($guru_kelas_ids)) {
+        $ids_str = implode(',', $guru_kelas_ids);
+        $where_clause = " WHERE s.kelas_id IN ($ids_str) ";
+    } else {
+        $where_clause = " WHERE 1=0 "; // No classes assigned
+    }
+}
+
+// --- FILTER LOGIC (Academic Year & Semester) ---
+$current_year = date('Y');
+$current_month = date('n');
+
+// Determine default Academic Year
+if ($current_month >= 7) {
+    $default_tahun_ajaran = $current_year . '/' . ($current_year + 1);
+    $default_semester = 'ganjil';
+} else {
+    $default_tahun_ajaran = ($current_year - 1) . '/' . $current_year;
+    $default_semester = 'genap';
+}
+
+$tahun_ajaran = isset($_GET['tahun_ajaran']) ? $_GET['tahun_ajaran'] : $default_tahun_ajaran;
+$semester = isset($_GET['semester']) ? $_GET['semester'] : $default_semester;
+
+// Parse Academic Year (e.g., "2025/2026" -> 2025, 2026)
+$ta_parts = explode('/', $tahun_ajaran);
+$ta_start = (int)$ta_parts[0];
+$ta_end = (int)$ta_parts[1];
+
+// Define Date Ranges for Queries
+if ($semester === 'ganjil') {
+    // July - Dec of Start Year
+    $start_date = "$ta_start-07-01";
+    $end_date = "$ta_start-12-31";
+    $infaq_condition = "(p.tahun = $ta_start AND p.bulan >= 7)";
+} elseif ($semester === 'genap') {
+    // Jan - Jun of End Year
+    $start_date = "$ta_end-01-01";
+    $end_date = "$ta_end-06-30";
+    $infaq_condition = "(p.tahun = $ta_end AND p.bulan <= 6)";
+} else {
+    // Full Year (July Start - June End)
+    $start_date = "$ta_start-07-01";
+    $end_date = "$ta_end-06-30";
+    $infaq_condition = "((p.tahun = $ta_start AND p.bulan >= 7) OR (p.tahun = $ta_end AND p.bulan <= 6))";
+}
+
+// --- 1. Summary Counts (Global or Filtered) ---
+// Note: If filtered by class, these counts should reflect that class.
+$count_where = "";
+if ($user_role === 'admin' && $kelas_filter) {
+    $count_where = " WHERE id IN (SELECT id FROM siswa WHERE kelas_id = $kelas_filter) "; // Simplified logic
+} elseif ($user_role === 'guru') {
+    // Logic for guru counts if needed
+}
+
+$total_siswa = $conn->query("SELECT COUNT(*) FROM siswa " . ($user_role === 'admin' && $kelas_filter ? "WHERE kelas_id = $kelas_filter" : ($user_role === 'guru' && !empty($guru_kelas_ids) ? "WHERE kelas_id IN (" . implode(',', $guru_kelas_ids) . ")" : "")))->fetch_row()[0];
+$total_guru = $conn->query("SELECT COUNT(*) FROM users WHERE role = 'guru'")->fetch_row()[0]; // Always global
+$total_kelas = $conn->query("SELECT COUNT(*) FROM kelas")->fetch_row()[0]; // Always global
+
+// --- 2. Financial Summary (Total Collected - Respect Filter & Academic Year) ---
+// We need to join with siswa table to filter by class AND date range
+$q_spp1 = "SELECT SUM(p.jumlah) FROM pembayaran_spp_harian p JOIN siswa s ON p.siswa_id = s.id $where_clause AND p.tanggal BETWEEN '$start_date' AND '$end_date'";
+$total_spp1 = $conn->query($q_spp1)->fetch_row()[0] ?? 0;
+
+$q_spp2 = "SELECT SUM(p.jumlah) FROM pembayaran_spp_mingguan p JOIN siswa s ON p.siswa_id = s.id $where_clause AND $infaq_condition";
+$total_spp2 = $conn->query($q_spp2)->fetch_row()[0] ?? 0;
+
+$q_lain = "SELECT SUM(p.jumlah) FROM pembayaran_biaya_lain p JOIN siswa s ON p.siswa_id = s.id $where_clause AND p.tanggal BETWEEN '$start_date' AND '$end_date'";
+$total_lain = $conn->query($q_lain)->fetch_row()[0] ?? 0;
+
+$total_income = $total_spp1 + $total_spp2 + $total_lain;
+
+// Fetch Classes for Dropdown
+$all_classes = [];
+if ($user_role === 'admin') {
+    $q_ac = $conn->query("SELECT * FROM kelas ORDER BY nama_kelas");
+    while ($row = $q_ac->fetch_assoc()) $all_classes[] = $row;
+}
+?>
+
+<!-- Header & Filter -->
+<div class="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4">
+    <div>
+        <h2 class="text-2xl font-bold text-gray-800 font-serif">Dashboard</h2>
+        <p class="text-gray-600 text-sm">Ringkasan data dan keuangan TPQ.</p>
+    </div>
+
+    <form method="GET" class="flex flex-col md:flex-row gap-2 bg-white p-3 rounded-lg shadow-sm border w-full lg:w-auto">
+        <input type="hidden" name="section" value="dashboard">
+
+        <!-- Filter Tahun Ajaran -->
+        <div class="flex items-center">
+            <label for="tahun_ajaran" class="text-sm font-medium text-gray-700 mr-2 whitespace-nowrap">Thn Ajaran:</label>
+            <select name="tahun_ajaran" id="tahun_ajaran" onchange="this.form.submit()" class="text-sm border-gray-300 rounded-md focus:ring-teal-500 focus:border-teal-500">
+                <?php
+                $current_year = date('Y');
+
+                $base_year = 2024; // Earliest year in system
+
+                $end_year = $current_year + 2; // Allow planning 2 years ahead
+
+                for ($y1 = $base_year; $y1 <= $end_year; $y1++) {
+                    $y2 = $y1 + 1;
+                    $val = "$y1/$y2";
+                    $sel = ($tahun_ajaran == $val) ? 'selected' : '';
+                    echo "<option value='$val' $sel>$val</option>";
+                }
+                ?>
+            </select>
+        </div>
+
+        <!-- Filter Semester -->
+        <div class="flex items-center">
+            <label for="semester" class="text-sm font-medium text-gray-700 mr-2">Smt:</label>
+            <select name="semester" id="semester" onchange="this.form.submit()" class="text-sm border-gray-300 rounded-md focus:ring-teal-500 focus:border-teal-500">
+                <option value="ganjil" <?php echo $semester == 'ganjil' ? 'selected' : ''; ?>>Ganjil (Jul-Des)</option>
+                <option value="genap" <?php echo $semester == 'genap' ? 'selected' : ''; ?>>Genap (Jan-Jun)</option>
+                <option value="semua" <?php echo $semester == 'semua' ? 'selected' : ''; ?>>Satu Tahun</option>
+                <option value="bulanan" <?php echo $semester == 'bulanan' ? 'selected' : ''; ?>>Bulanan</option>
+                <option value="mingguan" <?php echo $semester == 'mingguan' ? 'selected' : ''; ?>>Mingguan</option>
+            </select>
+        </div>
+
+        <?php if ($user_role === 'admin'): ?>
+            <!-- Filter Kelas -->
+            <div class="flex items-center">
+                <label for="kelas_filter" class="text-sm font-medium text-gray-700 mr-2">Kelas:</label>
+                <select name="kelas_filter" id="kelas_filter" onchange="this.form.submit()" class="text-sm border-gray-300 rounded-md focus:ring-teal-500 focus:border-teal-500">
+                    <option value="">Semua Kelas</option>
+                    <?php foreach ($all_classes as $cls): ?>
+                        <option value="<?php echo $cls['id']; ?>" <?php echo $kelas_filter == $cls['id'] ? 'selected' : ''; ?>>
+                            <?php echo htmlspecialchars($cls['nama_kelas']); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+        <?php endif; ?>
+    </form>
+</div>
+
+<!-- Summary Cards -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+    <?php
+    $cards = [
+        ['title' => 'Total Siswa', 'value' => $total_siswa, 'icon' => 'fa-user-graduate', 'color' => 'bg-teal-500'],
+        ['title' => 'Total Guru', 'value' => $total_guru, 'icon' => 'fa-chalkboard-teacher', 'color' => 'bg-blue-500'],
+        ['title' => 'Total Kelas', 'value' => $total_kelas, 'icon' => 'fa-school', 'color' => 'bg-purple-500'],
+        ['title' => 'Pemasukan (Filter)', 'value' => 'Rp ' . number_format($total_income, 0, ',', '.'), 'icon' => 'fa-money-bill-wave', 'color' => 'bg-green-500'],
+    ];
+    foreach ($cards as $card): ?>
+        <div class="bg-white rounded-xl shadow-md p-6 flex items-center border-l-4 <?php echo str_replace('bg-', 'border-', $card['color']); ?>">
+            <div class="p-4 rounded-full <?php echo $card['color']; ?> text-white mr-4 shadow-sm">
+                <i class="fas <?php echo $card['icon']; ?> fa-lg"></i>
+            </div>
+            <div>
+                <p class="text-gray-500 text-sm font-medium"><?php echo $card['title']; ?></p>
+                <h3 class="text-2xl font-bold text-gray-800 font-serif"><?php echo $card['value']; ?></h3>
+            </div>
+        </div>
+    <?php endforeach; ?>
+</div>
+
+<!-- Financial Breakdown Cards -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+    <div class="bg-white rounded-xl shadow-md p-6 border-t-4 border-teal-500">
+        <p class="text-gray-500 text-sm font-medium">Total SPP Harian (Ikhsan)</p>
+        <h3 class="text-2xl font-bold text-teal-600">Rp <?php echo number_format($total_spp1, 0, ',', '.'); ?></h3>
+        <p class="text-xs text-gray-500 mt-1">Periode: <?php echo date('d M Y', strtotime($start_date)) . ' - ' . date('d M Y', strtotime($end_date)); ?></p>
+    </div>
+    <div class="bg-white rounded-xl shadow-md p-6 border-t-4 border-blue-500">
+        <p class="text-gray-500 text-sm font-medium">Infaq (<?php echo ucfirst($semester); ?>)</p>
+        <h3 class="text-2xl font-bold text-blue-600">Rp <?php echo number_format($total_spp2, 0, ',', '.'); ?></h3>
+    </div>
+    <div class="bg-white rounded-xl shadow-md p-6 border-t-4 border-purple-500">
+        <p class="text-gray-500 text-sm font-medium">Biaya Lain (<?php echo ucfirst($semester); ?>)</p>
+        <h3 class="text-2xl font-bold text-purple-600">Rp <?php echo number_format($total_lain, 0, ',', '.'); ?></h3>
+    </div>
+</div>
+
+<!-- Main Chart Section -->
+<div class="bg-white rounded-xl shadow-md p-6 mb-8">
+    <h3 class="text-lg font-bold text-gray-800 mb-4 font-serif border-b pb-2">
+        <?php
+        if ($user_role === 'admin' && !$kelas_filter) echo "Perbandingan Pemasukan per Kelas";
+        else echo "Perbandingan Pemasukan per Siswa";
+        ?>
+    </h3>
+    <div class="h-80">
+        <canvas id="mainChart"></canvas>
+    </div>
+</div>
+
+<!-- Table Section -->
+<div class="bg-white rounded-xl shadow-md p-6 mb-8">
+    <div class="flex justify-between items-center mb-4 border-b pb-2">
+        <h3 class="text-lg font-bold text-gray-800 font-serif">
+            <?php echo ($user_role === 'admin') ? "Ringkasan Pembayaran per Kelas" : "Rincian Pembayaran Siswa"; ?>
+        </h3>
+        <a href="section/export_dashboard.php?kelas_filter=<?php echo $kelas_filter; ?>&tahun_ajaran=<?php echo urlencode($tahun_ajaran); ?>&semester=<?php echo $semester; ?>" target="_blank" class="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors flex items-center">
+            <i class="fas fa-file-excel mr-1"></i> Ekspor ke Excel
+        </a>
+    </div>
+
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <?php if ($user_role === 'admin'): ?>
+                    <!-- Admin Table Header -->
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Kelas</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Ikhsan (Masuk)</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Infaq (Masuk)</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Biaya Lain</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
+                    </tr>
+                <?php else: ?>
+                    <!-- Guru/Detail Table Header -->
+                    <tr>
+                        <th rowspan="2" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider align-middle">Nama Siswa</th>
+                        <th colspan="2" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">IKHSAN</th>
+                        <th colspan="2" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">INFAQ</th>
+                        <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b">BIAYA LAIN</th>
+                    </tr>
+                    <tr>
+                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">Sudah Bayar</th>
+                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">Kekurangan</th>
+                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">Sudah Bayar</th>
+                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">Kekurangan</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">Rincian</th>
+                    </tr>
+                <?php endif; ?>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+                <?php
+                if ($user_role === 'admin') {
+                    // --- ADMIN VIEW (Per Class Summary) ---
+                    // Fixed query to avoid Cartesian product from multiple LEFT JOINs
+                    $class_query = "
+                        SELECT 
+                            k.id, k.nama_kelas,
+                            (SELECT COALESCE(SUM(p.jumlah), 0) 
+                             FROM pembayaran_spp_harian p 
+                             JOIN siswa s ON p.siswa_id = s.id 
+                             WHERE s.kelas_id = k.id AND p.tanggal BETWEEN '$start_date' AND '$end_date') as total_spp1,
+                            (SELECT COALESCE(SUM(p.jumlah), 0) 
+                             FROM pembayaran_spp_mingguan p 
+                             JOIN siswa s ON p.siswa_id = s.id 
+                             WHERE s.kelas_id = k.id AND $infaq_condition) as total_spp2,
+                            (SELECT COALESCE(SUM(p.jumlah), 0) 
+                             FROM pembayaran_biaya_lain p 
+                             JOIN siswa s ON p.siswa_id = s.id 
+                             WHERE s.kelas_id = k.id AND p.tanggal BETWEEN '$start_date' AND '$end_date') as total_lain
+                        FROM kelas k
+                    ";
+                    if ($kelas_filter) {
+                        $class_query .= " WHERE k.id = $kelas_filter ";
+                    }
+                    $class_query .= " ORDER BY k.nama_kelas";
+
+                    $res = $conn->query($class_query);
+                    while ($row = $res->fetch_assoc()):
+                        $total_row = $row['total_spp1'] + $row['total_spp2'] + $row['total_lain'];
+                ?>
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900"><?php echo htmlspecialchars($row['nama_kelas']); ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">Rp <?php echo number_format($row['total_spp1'], 0, ',', '.'); ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">Rp <?php echo number_format($row['total_spp2'], 0, ',', '.'); ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">Rp <?php echo number_format($row['total_lain'], 0, ',', '.'); ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-green-600 text-right">Rp <?php echo number_format($total_row, 0, ',', '.'); ?></td>
+                        </tr>
+                    <?php
+                    endwhile;
+                } else {
+                    // --- GURU VIEW (Per Student Detail) ---
+
+                    $student_query = "
+                        SELECT 
+                            s.id, s.nama,
+                            (SELECT COALESCE(SUM(jumlah), 0) FROM pembayaran_spp_harian p WHERE p.siswa_id = s.id AND p.tanggal BETWEEN '$start_date' AND '$end_date') as bayar_ikhsan,
+                            (SELECT COALESCE(SUM(jumlah), 0) FROM pembayaran_spp_mingguan p WHERE p.siswa_id = s.id AND $infaq_condition) as bayar_infaq
+                        FROM siswa s
+                        $where_clause
+                        ORDER BY s.nama
+                    ";
+
+                    $res = $conn->query($student_query);
+                    while ($row = $res->fetch_assoc()):
+                        // Calculate Arrears
+                        $kurang_ikhsan = max(0, $target_ikhsan - $row['bayar_ikhsan']);
+                        $kurang_infaq = max(0, $target_infaq - $row['bayar_infaq']);
+
+                        // Get Biaya Lain Details
+                        $bl_details = [];
+                        $q_bl = $conn->query("
+                            SELECT b.nama, b.jumlah as tagihan, COALESCE(SUM(p.jumlah), 0) as terbayar
+                            FROM biaya_lain_master b
+                            LEFT JOIN pembayaran_biaya_lain p ON b.id = p.biaya_lain_id AND p.siswa_id = " . $row['id'] . " AND p.tanggal BETWEEN '$start_date' AND '$end_date'
+                            GROUP BY b.id
+                        ");
+                        while ($bl = $q_bl->fetch_assoc()) {
+                            $sisa = $bl['tagihan'] - $bl['terbayar'];
+                            if ($sisa > 0) {
+                                $bl_details[] = $bl['nama'] . " (-" . number_format($sisa, 0, ',', '.') . ")";
+                            }
+                        }
+                        $bl_text = empty($bl_details) ? '<span class="text-green-500 text-xs">Lunas</span>' : '<span class="text-red-500 text-xs">' . implode('<br>', $bl_details) . '</span>';
+                    ?>
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900"><?php echo htmlspecialchars($row['nama']); ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">Rp <?php echo number_format($row['bayar_ikhsan'], 0, ',', '.'); ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-red-500 text-right font-medium">Rp <?php echo number_format($kurang_ikhsan, 0, ',', '.'); ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">Rp <?php echo number_format($row['bayar_infaq'], 0, ',', '.'); ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-red-500 text-right font-medium">Rp <?php echo number_format($kurang_infaq, 0, ',', '.'); ?></td>
+                            <td class="px-6 py-4 text-sm text-left"><?php echo $bl_text; ?></td>
+                        </tr>
+                <?php endwhile;
+                } ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<?php
+// --- CHART DATA PREPARATION ---
+$chart_labels = [];
+$data_ikhsan = [];
+$data_infaq = [];
+$data_biaya_lain = [];
+
+if ($user_role === 'admin' && !$kelas_filter) {
+    // View: Per Class
+    $q_chart = $conn->query("
+        SELECT 
+            k.nama_kelas,
+            (SELECT COALESCE(SUM(jumlah), 0) FROM pembayaran_spp_harian p JOIN siswa s ON p.siswa_id = s.id WHERE s.kelas_id = k.id AND p.tanggal BETWEEN '$start_date' AND '$end_date') as ikhsan,
+            (SELECT COALESCE(SUM(jumlah), 0) FROM pembayaran_spp_mingguan p JOIN siswa s ON p.siswa_id = s.id WHERE s.kelas_id = k.id AND $infaq_condition) as infaq,
+            (SELECT COALESCE(SUM(jumlah), 0) FROM pembayaran_biaya_lain p JOIN siswa s ON p.siswa_id = s.id WHERE s.kelas_id = k.id AND p.tanggal BETWEEN '$start_date' AND '$end_date') as lain
+        FROM kelas k
+        ORDER BY k.nama_kelas
+    ");
+    while ($row = $q_chart->fetch_assoc()) {
+        $chart_labels[] = $row['nama_kelas'];
+        $data_ikhsan[] = $row['ikhsan'];
+        $data_infaq[] = $row['infaq'];
+        $data_biaya_lain[] = $row['lain'];
+    }
+} else {
+    // View: Per Student (Admin Filtered OR Guru)
+    $q_chart = $conn->query("
+        SELECT 
+            s.nama,
+            (SELECT COALESCE(SUM(jumlah), 0) FROM pembayaran_spp_harian p WHERE p.siswa_id = s.id AND p.tanggal BETWEEN '$start_date' AND '$end_date') as ikhsan,
+            (SELECT COALESCE(SUM(jumlah), 0) FROM pembayaran_spp_mingguan p WHERE p.siswa_id = s.id AND $infaq_condition) as infaq,
+            (SELECT COALESCE(SUM(jumlah), 0) FROM pembayaran_biaya_lain p WHERE p.siswa_id = s.id AND p.tanggal BETWEEN '$start_date' AND '$end_date') as lain
+        FROM siswa s
+        $where_clause
+        ORDER BY s.nama
+    ");
+    while ($row = $q_chart->fetch_assoc()) {
+        $chart_labels[] = $row['nama'];
+        $data_ikhsan[] = $row['ikhsan'];
+        $data_infaq[] = $row['infaq'];
+        $data_biaya_lain[] = $row['lain'];
+    }
+}
+?>
+
+<script>
+    const ctx = document.getElementById('mainChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: <?php echo json_encode($chart_labels); ?>,
+            datasets: [{
+                    label: 'Ikhsan',
+                    data: <?php echo json_encode($data_ikhsan); ?>,
+                    backgroundColor: 'rgba(20, 184, 166, 0.7)', // Teal
+                },
+                {
+                    label: 'Infaq',
+                    data: <?php echo json_encode($data_infaq); ?>,
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)', // Blue
+                },
+                {
+                    label: 'Biaya Lain',
+                    data: <?php echo json_encode($data_biaya_lain); ?>,
+                    backgroundColor: 'rgba(168, 85, 247, 0.7)', // Purple
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: {
+                    stacked: false
+                },
+                y: {
+                    stacked: false,
+                    beginAtZero: true
+                }
+            },
+            plugins: {
+                legend: {
+                    position: 'top'
+                }
+            }
+        }
+    });
+</script>

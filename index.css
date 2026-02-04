@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom Student Styles */
+body {
+    font-family: 'Inter', sans-serif;
+    background-color: #f0f9ff;
+}
